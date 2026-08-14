@@ -1,10 +1,8 @@
-from infant_dataset import session_infomation_whole
 from sklearn.ensemble import RandomForestRegressor
 import statsmodels.stats.multitest as smm
 from sklearn.model_selection import cross_val_score, KFold
 from sklearn.linear_model import LinearRegression
 import numpy as np
-from spontaneous_dynamic_decomposition import back_upper_triangles
 from scipy.stats import pearsonr
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -17,6 +15,27 @@ from scipy.stats import pearsonr
 from sklearn.linear_model import LinearRegression
 
 
+
+def back_upper_triangles(upper_triangle, size, k=1):
+    upper_triangle = np.array(upper_triangle)
+
+    if upper_triangle.ndim==1:
+        # Create an empty matrix filled with zeros
+        reconstructed_matrix = np.zeros((size, size)).astype('float')
+
+        # Fill the upper triangular part (including diagonal) of the matrix
+        reconstructed_matrix[np.triu_indices(size, k=k)] = upper_triangle
+        reconstructed_matrix = reconstructed_matrix + reconstructed_matrix.T
+
+    elif upper_triangle.ndim==2:
+        reconstructed_matrix = []
+        for i in range(upper_triangle.shape[0]):
+            tmp_mat = np.zeros((size, size)).astype('float')
+            tmp_mat[np.triu_indices(size, k=k)] = upper_triangle[i, :]
+            tmp_mat = tmp_mat + tmp_mat.T
+            reconstructed_matrix.append(tmp_mat)
+        reconstructed_matrix = np.array(reconstructed_matrix)
+    return reconstructed_matrix
 
 
 def calculate_mean_modularity(pattern):
@@ -35,51 +54,23 @@ def calculate_mean_modularity(pattern):
     return mean_modularity
 
 
-def early_prediction():
-    state_number = 5
+def early_prediction(datapath = '.'):
 
-    datapath = '.'
-    session_list = np.load(f'{datapath }/session_list_{state_number}.npy')[:, 0]
-
+    session_list = np.load(f'{datapath }/session_list.npy')
     print(len(session_list ))
 
-    baseline_FC = np.load(f'{datapath }/baseline_list_5.npy')
-    after_FC = np.load(f'{datapath }/after_list_5.npy')
-
-    # mid age
-    demo = np.load(f'{datapath }/demo_list_{state_number}.npy')
-    base_age_obs = demo[:, 0]*7
-    followup_age_obs = (demo[:, 0]+ demo[:,1])*7
-    mid_age_obs = (demo[:, 0]+ 0.5*demo[:,1])*7
-    mid_age_obs = mid_age_obs.reshape(-1)
-    interval = demo[:,1:2]*7
-
-
     # base after FA
-
-    FA_before = np.load(f'{datapath}/baseline_FA_list_5_thre_0.npy')
-    FA_after = np.load(f'{datapath}/after_FA_list_5_thre_0.npy')
+    FA_before = np.load(f'{datapath}/FLARe_at_baseline.npy')
+    FA_after = np.load(f'{datapath}/FLARe_at_followup.npy')
 
     FA_before= np.concatenate([ FA_before, FA_before**2 ], axis=1)
     FA_after = np.concatenate([ FA_after, FA_after**2], axis=1)
 
     # change rate
-    change_list = np.load(f'{datapath }/change_list_{state_number}.npy')
-    print('change list',change_list.shape, FA_before.shape)
-    change_rate = change_list/interval
+    change_rate = np.load(f'{datapath }/individual_connectivity_CRs.npy')
     change_rate  = np.array([ back_upper_triangles(change, 53, k=1 ) for change in change_rate ])
 
-    # filter less than 2 month intervals 
-    indice = (interval.flatten())<9*7
-    session_list = session_list[indice]
-    change_rate = change_rate[indice]
-    FA_before,  FA_after = FA_before[indice],  FA_after[indice]
-    mid_age_obs = mid_age_obs[indice]
-    followup_age_obs = followup_age_obs[indice]
-    base_age_obs = base_age_obs[indice]
-    baseline_FC = baseline_FC[indice]
-    after_FC = after_FC[indice]
-    print(base_age_obs.min(), base_age_obs.max(), (followup_age_obs-base_age_obs).mean(), (followup_age_obs-base_age_obs).std())
+    print('change list',change_rate.shape, FA_before.shape)
 
     unique_sub_list = list(set([session[:8] for session in session_list]))
     unique_sub_list = np.array(unique_sub_list)
@@ -87,11 +78,6 @@ def early_prediction():
         
     change_list_modular = np.array([ calculate_mean_modularity(change_pattern) for change_pattern in change_rate ])
     change_list_modular = np.array([ change_pattern[np.tril_indices(7, k=0)] for change_pattern in change_list_modular])
-    base_FC_modular =  np.array([ calculate_mean_modularity(back_upper_triangles(pattern, 53, k=1)) for pattern in baseline_FC ])
-    base_FC_modular_obs = np.array([  pattern[np.tril_indices(7, k=0)] for pattern in base_FC_modular ])
-                                
-    after_FC_modular =  np.array([ calculate_mean_modularity(back_upper_triangles(pattern, 53, k=1)) for pattern in after_FC ])
-    after_FC_modular_obs = np.array([  pattern[np.tril_indices(7, k=0)] for pattern in after_FC_modular ])
 
     print('input',change_list_modular.shape)
 
@@ -100,24 +86,23 @@ def early_prediction():
     all_obs = []
     all_pre = []
 
-    for trail in range(100):
+    for trail in range(1000):
         performance_list = []
         performance_obs = []
         performance_pre = []
 
         print('trail:',trail)
-        for conn in [ 24]: #range(change_list_modular.shape[1]):
+        for conn in  range(change_list_modular.shape[1]):
             random_number = np.random.randint(1, 300)
             kf = KFold(n_splits=10, shuffle=True, random_state=random_number)
             y_true_all = []
             y_pred_all = []
 
-            r_max = -3
             p=-2
             estimate = 50
  
-            y_true_tmp = []
-            y_pred_tmp = []
+            y_true_all = []
+            y_pred_all = []
 
             # Perform 10-fold cross-validation
             for train_idx, test_idx in kf.split(unique_sub_list):
@@ -134,10 +119,10 @@ def early_prediction():
 
                 # Predict on test fold
                 y_pred = model.predict(X_test)
-                y_true_tmp.extend(y_test)
-                y_pred_tmp.extend(y_pred)
+                y_true_all.extend(y_test)
+                y_pred_all.extend(y_pred)
 
-            r, p = pearsonr(y_true_tmp, y_pred_tmp)
+            r, p = pearsonr(y_true_all, y_pred_all)
 
             print(conn, r, p)
             performance_list.append([r, p])
@@ -157,48 +142,22 @@ def early_prediction():
     return None
 
 
-def late_prediction():
-    state_number = 5
+def late_prediction(datapath = '.'):
 
-    datapath = '.'
-    session_list = np.load(f'{datapath }/session_list_{state_number}.npy')[:, 0]
+    session_list = np.load(f'{datapath }/session_list.npy')
     print(len(session_list ))
 
-    baseline_FC = np.load(f'{datapath }/baseline_list_5.npy')
-    after_FC = np.load(f'{datapath }/after_list_5.npy')
-
-    # mid age
-    demo = np.load(f'{datapath }/demo_list_{state_number}.npy')
-    base_age_obs = demo[:, 0]*7
-    followup_age_obs = (demo[:, 0]+ demo[:,1])*7
-    mid_age_obs = (demo[:, 0]+ 0.5*demo[:,1])*7
-    mid_age_obs = mid_age_obs.reshape(-1)
-    interval = demo[:,1:2]*7
-    
     # base after FA
-    FA_before = np.load(f'{datapath}/baseline_FA_list_5_thre_0.npy')
-    FA_after = np.load(f'{datapath}/after_FA_list_5_thre_0.npy')
+    FA_before = np.load(f'{datapath}/FLARe_at_baseline.npy')
+    FA_after = np.load(f'{datapath}/FLARe_at_followup.npy')
 
     FA_before= np.concatenate([ FA_before, FA_before**2 ], axis=1)
     FA_after = np.concatenate([ FA_after, FA_after**2], axis=1)
 
     # change rate
-    change_list = np.load(f'{datapath }/change_list_{state_number}.npy')
-    print('change list',change_list.shape, FA_before.shape)
-    change_rate = change_list/interval
+    change_rate = np.load(f'{datapath }/individual_connectivity_CRs.npy')
     change_rate  = np.array([ back_upper_triangles(change, 53, k=1 ) for change in change_rate ])
-
-    # filter less than 2 month intervals 
-    indice = (interval.flatten())<9*7
-    session_list = session_list[indice]
-    change_rate = change_rate[indice]
-    FA_before,  FA_after = FA_before[indice],  FA_after[indice]
-    mid_age_obs = mid_age_obs[indice]
-    followup_age_obs = followup_age_obs[indice]
-    base_age_obs = base_age_obs[indice]
-    baseline_FC = baseline_FC[indice]
-    after_FC = after_FC[indice]
-    print(base_age_obs.min(), base_age_obs.max(), (followup_age_obs-base_age_obs).mean(), (followup_age_obs-base_age_obs).std())
+    print('change list',change_rate.shape, FA_before.shape)
 
     unique_sub_list = list(set([session[:8] for session in session_list]))
     unique_sub_list = np.array(unique_sub_list)
@@ -206,12 +165,6 @@ def late_prediction():
         
     change_list_modular = np.array([ calculate_mean_modularity(change_pattern) for change_pattern in change_rate ])
     change_list_modular = np.array([ change_pattern[np.tril_indices(7, k=0)] for change_pattern in change_list_modular])
-    base_FC_modular =  np.array([ calculate_mean_modularity(back_upper_triangles(pattern, 53, k=1)) for pattern in baseline_FC ])
-    base_FC_modular_obs = np.array([  pattern[np.tril_indices(7, k=0)] for pattern in base_FC_modular ])
-                                
-    after_FC_modular =  np.array([ calculate_mean_modularity(back_upper_triangles(pattern, 53, k=1)) for pattern in after_FC ])
-    after_FC_modular_obs = np.array([  pattern[np.tril_indices(7, k=0)] for pattern in after_FC_modular ])
-
     print('input',change_list_modular.shape)
 
 
@@ -219,22 +172,21 @@ def late_prediction():
     all_obs = []
     all_pre = []
 
-    for trail in range(100):
+    for trail in range(1000):
         performance_list = []
         performance_obs = []
         performance_pre = []
 
         print('trail:',trail)
-        for conn in [ 24]: #range(change_list_modular.shape[1]):
+        for conn in range(change_list_modular.shape[1]):
             random_number = np.random.randint(1, 300)
             kf = KFold(n_splits=10, shuffle=True, random_state=random_number)
             y_true_all = []
             y_pred_all = []
-            p=-2
             estimate = 50
  
-            y_true_tmp = []
-            y_pred_tmp = []
+            y_true_all = []
+            y_pred_all = []
 
             # Perform 10-fold cross-validation
             for train_idx, test_idx in kf.split(unique_sub_list):
@@ -251,10 +203,10 @@ def late_prediction():
 
                 # Predict on test fold
                 y_pred = model.predict(X_test)
-                y_true_tmp.extend(y_test)
-                y_pred_tmp.extend(y_pred)
+                y_pred_all.extend(y_test)
+                y_true_all.extend(y_pred)
 
-            r, p = pearsonr(y_true_tmp, y_pred_tmp)
+            r, p = pearsonr(y_true_all, y_pred_all)
 
             print(conn, r, p)
             performance_list.append([r, p])
@@ -330,10 +282,9 @@ def ci_ttest_repeated_kfold_aggregated_r(
     }
 
 
-
-def significance():
+def significance(file, savename):
     from statsmodels.stats.multitest import multipletests
-    from spontaneous_dynamic_decomposition import back_upper_triangles
+    # from spontaneous_dynamic_decomposition import back_upper_triangles
     import pandas as pd
 
     mean_r_list = []
@@ -341,7 +292,7 @@ def significance():
     p_list = []
     df_list = []
     for i in range(28):
-        r_scores = np.load(f'FA_prediction_rp_999_before_2month_1000.npy')[:,i, 0]
+        r_scores = np.load(file)[:,i, 0]
         res = ci_ttest_repeated_kfold_aggregated_r(r_scores, k=10, alpha=0.05, two_sided=False)
         p_list.append(res['p'])
         mean_r_list.append(res['mean_r'])
@@ -358,8 +309,13 @@ def significance():
     print(mean_r_list.shape, CI_r_list.shape, p_list.shape)
     print(np.array([mean_r_list, CI_r_list, p_list_str]))
     info = pd.DataFrame(np.array([mean_r_list, CI_r_list, df_list, p_list_str ]).T, columns=['mean r','confidence interval (CI)','degree of freedom','FDR-corrected p'])
-    info.to_csv('FA_prediction_2month_before.csv')
-
+    info.to_csv(savename)
     return None
 
 
+if __name__ == '__main__':
+    early_prediction(datapath = 'D:/GroupICA/infant_reference/github/source_data/Figure_6')
+    significance('FA_prediction_rp_999_before_2month_1000.npy', 'early_prediction')
+
+    # late_prediction(datapath = 'D:/GroupICA/infant_reference/github/source_data/Figure_6')
+    # significance('FA_prediction_rp_999_after_2month_1000.npy', 'late_prediction')
