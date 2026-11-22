@@ -1,0 +1,115 @@
+import numpy as np
+from scipy.io import savemat
+
+
+save_dir = '.'
+
+def fisher_z_transform(corr_matrix):
+    """
+    Applies the Fisher z-transformation to a correlation matrix.
+
+    Parameters:
+    corr_matrix (numpy.ndarray): Square correlation matrix of shape (n, n)
+
+    Returns:
+    numpy.ndarray: Transformed matrix with Fisher z-scores
+    """
+    # Ensure the matrix is a numpy array
+    corr_matrix = np.array(corr_matrix)
+    corr_matrix[np.isnan(corr_matrix)] = 0
+    np.fill_diagonal(corr_matrix, 0)
+
+    # Apply Fisher transformation, avoiding invalid values like r=1 or r=-1
+    np.seterr(divide='ignore', invalid='ignore')  # Handle potential warnings for divide by zero
+
+    fisher_z = 0.5 * np.log((1 + corr_matrix) / (1 - corr_matrix))
+    fisher_z[np.isinf(fisher_z)] = 0
+    
+    return fisher_z
+
+def rest_FNC(timeseries_list):
+    FNC_list = []
+    for timeseries in timeseries_list:
+        corr = np.corrcoef(timeseries.T)
+        corr = fisher_z_transform(corr)
+        FNC_list.append(corr)
+    FNC_list = np.array(FNC_list)
+    return FNC_list
+
+def calculate_modularity_matrix(matrix):
+    domain_list = ['SCN', 'AUD', 'SMN', 'VIS', 'CON', 'DMN', 'CER' ]
+    domain_position = np.array([[0,5],[5,7],[7, 16],[16, 25], [25, 42], [42, 49], [49, 53]])
+
+    mean_modularity = np.zeros([7,7])
+    for i, domain1 in enumerate(domain_list):
+        for j, domain2 in enumerate(domain_list):
+            tmp = matrix[ domain_position[i][0]:domain_position[i][1], domain_position[j][0]:domain_position[j][1]]
+            if i==j:
+                mean = tmp[ np.triu_indices(tmp.shape[1], k=1)].mean()
+            else:
+                mean = tmp.mean()
+            mean_modularity[i,j] = mean
+
+    mean_cross_modular = list(mean_modularity[np.triu_indices(mean_modularity.shape[1], k=0)])
+    return np.array(mean_cross_modular)
+
+
+
+def estimate_growth_trajectory(n_splines=10, n_boot=None, x1_pred=None):
+    """Fit connectivity curves and their age derivatives for saved resamples."""
+    from pathlib import Path
+    if __package__:
+        from .GAMM_function import GAMM_trajectory_estimate
+    else:
+        from GAMM_function import GAMM_trajectory_estimate
+
+    input_dir = Path(__file__).resolve().parent
+    output_dir = Path(save_dir) / 'bootstrap'
+    output_dir.mkdir(parents=True, exist_ok=True)
+    indices = np.load(input_dir / 'bootstrap_unpaired_index.npy')
+    sessions = np.load(input_dir / 'unpaired_session_list_5.npy')
+    connectivity = np.load(input_dir / 'unpaired_sFNC_list_5.npy')
+    demo = np.load(input_dir / 'unpaired_demo_list_5.npy')
+    if x1_pred is None:
+        x1_pred = np.linspace(0, 180, 181)
+
+    if n_boot is None:
+        n_boot = len(indices)
+
+    for number in range(n_boot):
+        unpaired_indice = indices[number]
+        unpaired_session_list = sessions[unpaired_indice]
+        subject_id = np.array([session[:8] for session in unpaired_session_list])
+        static_connectivity = connectivity[unpaired_indice]
+        selected_demo = demo[unpaired_indice]
+        unpaired_age_list = selected_demo[:, 2] * 7
+        unpaired_gender_list = selected_demo[:, 0]
+        unpaired_hd_list = selected_demo[:, 6]
+        unpaired_TR_list = selected_demo[:, 5]
+        unpaired_site_list = np.array([1 if abs(vv-0.72)<0.001 else 0
+                                       for vv in unpaired_TR_list])
+        print('connectivity resample:', number, 'features:', static_connectivity.shape)
+        conn_derivative_list, conn_traj_list, conn_confid_list = [], [], []
+        for i in range(static_connectivity.shape[1]):
+            print(i)
+            _, conn_traj, conf_conn, conn_derivative = GAMM_trajectory_estimate(
+                static_connectivity[:, i], unpaired_age_list, unpaired_gender_list,
+                unpaired_hd_list, unpaired_site_list, subject_id,
+                gradients=True, x1_pred=x1_pred, n_splines=n_splines)
+            conn_derivative_list.append(conn_derivative)
+            conn_traj_list.append(conn_traj)
+            conn_confid_list.append(conf_conn)
+
+        np.save(output_dir / f'CS_list_dataset_{number}.npy', np.array(conn_traj_list))
+        savemat(output_dir / f'CS_derivative_dataset_{number}.mat',
+                {'dFNC': np.array(conn_derivative_list)})
+        
+
+
+
+
+if __name__ == '__main__':
+    estimate_growth_trajectory()
+
+
+    
