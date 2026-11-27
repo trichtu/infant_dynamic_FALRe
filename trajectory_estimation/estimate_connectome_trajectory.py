@@ -56,7 +56,12 @@ def calculate_modularity_matrix(matrix):
 
 
 def estimate_growth_trajectory(n_splines=10, n_boot=None, x1_pred=None):
-    """Fit connectivity curves and their age derivatives for saved resamples."""
+    """Fit the first 10 connections using the bundled connectivity_example.npz.
+
+    The example retains all scans, aligned age/sex/motion/site covariates,
+    infant IDs, and the existing resample masks. n_boot selects how many
+    saved resamples to fit (all by default).
+    """
     from pathlib import Path
     if __package__:
         from .GAMM_function import GAMM_trajectory_estimate
@@ -66,28 +71,25 @@ def estimate_growth_trajectory(n_splines=10, n_boot=None, x1_pred=None):
     input_dir = Path(__file__).resolve().parent
     output_dir = Path(save_dir) / 'bootstrap'
     output_dir.mkdir(parents=True, exist_ok=True)
-    indices = np.load(input_dir / 'bootstrap_unpaired_index.npy')
-    sessions = np.load(input_dir / 'unpaired_session_list_5.npy')
-    connectivity = np.load(input_dir / 'unpaired_sFNC_list_5.npy')
-    demo = np.load(input_dir / 'unpaired_demo_list_5.npy')
+    with np.load(input_dir / 'connectivity_example.npz') as example:
+        indices = example['resample_indices']
+        connectivity = example['connectivity']
+        subjects = example['subject']
+        ages = example['age']
+        genders = example['gender']
+        motion = example['motion']
+        sites = example['site']
     if x1_pred is None:
-        x1_pred = np.linspace(0, 180, 181)
-
-    if n_boot is None:
-        n_boot = len(indices)
+        x1_pred = np.arange(25, 176, dtype=float)
 
     for number in range(n_boot):
         unpaired_indice = indices[number]
-        unpaired_session_list = sessions[unpaired_indice]
-        subject_id = np.array([session[:8] for session in unpaired_session_list])
+        subject_id = subjects[unpaired_indice]
         static_connectivity = connectivity[unpaired_indice]
-        selected_demo = demo[unpaired_indice]
-        unpaired_age_list = selected_demo[:, 2] * 7
-        unpaired_gender_list = selected_demo[:, 0]
-        unpaired_hd_list = selected_demo[:, 6]
-        unpaired_TR_list = selected_demo[:, 5]
-        unpaired_site_list = np.array([1 if abs(vv-0.72)<0.001 else 0
-                                       for vv in unpaired_TR_list])
+        unpaired_age_list = ages[unpaired_indice]
+        unpaired_gender_list = genders[unpaired_indice]
+        unpaired_hd_list = motion[unpaired_indice]
+        unpaired_site_list = sites[unpaired_indice]
         print('connectivity resample:', number, 'features:', static_connectivity.shape)
         conn_derivative_list, conn_traj_list, conn_confid_list = [], [], []
         for i in range(static_connectivity.shape[1]):
@@ -104,9 +106,6 @@ def estimate_growth_trajectory(n_splines=10, n_boot=None, x1_pred=None):
         savemat(output_dir / f'CS_derivative_dataset_{number}.mat',
                 {'dFNC': np.array(conn_derivative_list)})
         
-
-
-
 
 if __name__ == '__main__':
     estimate_growth_trajectory()

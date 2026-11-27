@@ -1,5 +1,4 @@
 """Estimate behavioral GAMMs in 1,000 infant-level 80% subsamples."""
-import json
 from pathlib import Path
 
 import numpy as np
@@ -9,31 +8,21 @@ from GAMM_function import GAMM_trajectory_estimate
 
 
 ROOT = Path(__file__).resolve().parent
-DATA = '.'
-OUTPUT = '.'
+DATA = ROOT
+OUTPUT = ROOT
 
 
 def load_behavior(filename, column):
-    sessions = np.load(DATA / 'unpaired_session_list_5.npy').astype(str)
-    gender = np.load(DATA / 'unpaired_demo_list_5.npy')[:, 0]
-    demographics = pd.DataFrame({'subject': [s[:8] for s in sessions],
-                                 'gender': gender})
-
-    sex = demographics.drop_duplicates('subject').set_index('subject').gender
-    frame = pd.read_excel(DATA / filename)
-    frame['subject'] = frame.SubID.astype(str).str.replace('-', '_', regex=False).str[:8]
-    grouped = frame.groupby(['subject', 'CorrAge'], as_index=False)[column].mean()
-    grouped['gender'] = grouped.subject.map(sex)
-    valid = (np.isfinite(grouped[column]) & np.isfinite(grouped.CorrAge)
-             & grouped.gender.notna())
-    excluded = grouped.loc[~valid].copy()
-    return grouped.loc[valid].reset_index(drop=True), excluded
+    """Read saved infant-age averages with their age and sex covariates."""
+    frame = pd.read_csv(DATA / filename, dtype={'subject': str})
+    frame = frame[['subject', 'CorrAge', column, 'gender']]
+    valid = (np.isfinite(frame[column]) & np.isfinite(frame.CorrAge)
+             & frame.gender.notna() & frame.subject.notna())
+    return frame.loc[valid].reset_index(drop=True)
 
 
 def estimate(label, filename, column):
-    frame, excluded = load_behavior(filename, column)
-    frame.to_csv(OUTPUT / f'{label}_input.csv', index=False)
-    excluded.to_csv(OUTPUT / f'{label}_excluded.csv', index=False)
+    frame= load_behavior(filename, column)
     subjects = np.sort(frame.subject.unique().astype(str))
     sample_size = int(np.floor(0.8 * len(subjects)))
     ages = np.linspace(frame.CorrAge.min(), frame.CorrAge.max(), 181)
@@ -44,9 +33,11 @@ def estimate(label, filename, column):
         fitted = GAMM_trajectory_estimate(
             sample[column].to_numpy(), sample.CorrAge.to_numpy(),
             sample.gender.to_numpy(), np.zeros(len(sample)), np.zeros(len(sample)),
-            sample.subject.to_numpy(), subject_list=sample.subject.to_numpy(),
+            sample.subject.to_numpy(),
             gradients=True, x1_pred=ages, n_splines=4, reference=reference,
-            max_outer=1000, fit_method='QR', check_cond=0)
+            max_outer=1000, check_cond=0)
+        if fitted[0].info.code != 0:
+            raise RuntimeError(f'GAMM did not converge: code={fitted[0].info.code}')
         condition = np.linalg.cond(fitted[0].lvi.toarray())
         if not np.isfinite(condition) or condition > 1 / np.sqrt(np.finfo(float).eps / 2):
             raise RuntimeError(f'Ill-conditioned inverse factor: {condition}')
@@ -89,6 +80,6 @@ def estimate(label, filename, column):
 
 if __name__ == '__main__':
     OUTPUT.mkdir(exist_ok=True)
-    estimate('eyelooking', 'ETData_forLM_081825.xlsx', 'EyesFix')
-    estimate('targets', 'saccAmp_targetsReached_Data_LMsamp_103125_5deg.xlsx',
+    estimate('eyelooking', 'eyelooking_input.csv', 'EyesFix')
+    estimate('targets', 'targets_input.csv',
              '% Targets Reached')
